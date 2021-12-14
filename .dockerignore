@@ -1,0 +1,9 @@
+.vercel
+.env
+.git
+node_modules/
+.gitignore
+docker-compose.yml
+dockerfile
+package-lock.json
+vercel.json

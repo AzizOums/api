@@ -1,0 +1,33 @@
+version: "3"
+services:
+  app:
+    build: ./
+    container_name: "app"
+    depends_on:
+      - db
+    ports: 
+      - "3003:3003"
+    env_file: .env
+    restart: always
+    networks:
+      - net
+
+  db:
+    image: "mongo"
+    container_name: "db"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=root
+    volumes:
+      - dbdata:/data/db
+    ports:
+      - "27017-27019:27017-27019"
+    restart: always
+    networks:
+      - net
+
+networks:
+  net:
+
+volumes:
+  dbdata:

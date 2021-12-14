@@ -1,5 +1,4 @@
 const mongoose = require("mongoose");
-const { connect } = require("./connection");
 
 const { Schema } = mongoose;
 const { model } = mongoose;
@@ -9,8 +8,6 @@ const userSchema = Schema({
 });
 
 const userModel = model("users", userSchema);
-
-connect("users");
 
 const addUser = async (username) => {
   try {
