@@ -1,0 +1,6 @@
+region         = "us-east-1"
+environment    = "dev"
+db_password    = "change-me"
+secret_key     = "change-me-jwt-secret-min-32-chars"
+admin_email    = "admin@example.com"
+admin_password = "change-me"

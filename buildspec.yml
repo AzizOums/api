@@ -1,0 +1,48 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  parameter-store:
+    BACKEND_SERVICE_ARN:       /rag/apprunner/backend-arn
+    CLIENT_SERVICE_ARN:        /rag/apprunner/client-arn
+    ADMIN_SERVICE_ARN:         /rag/apprunner/admin-arn
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)
+
+  build:
+    commands:
+      - echo Building images...
+      - docker build -t $ECR_REGISTRY/dev-rag/backend:$IMAGE_TAG         ./backend
+      - docker build -t $ECR_REGISTRY/dev-rag/frontend-client:$IMAGE_TAG ./frontend-client
+      - docker build -t $ECR_REGISTRY/dev-rag/frontend-admin:$IMAGE_TAG  ./frontend-admin
+
+  post_build:
+    commands:
+      - echo Pushing images...
+      - docker push $ECR_REGISTRY/dev-rag/backend:$IMAGE_TAG
+      - docker push $ECR_REGISTRY/dev-rag/frontend-client:$IMAGE_TAG
+      - docker push $ECR_REGISTRY/dev-rag/frontend-admin:$IMAGE_TAG
+
+      - echo Deploying to App Runner...
+      - |
+        aws apprunner update-service \
+          --service-arn $BACKEND_SERVICE_ARN \
+          --source-configuration "{\"imageRepository\":{\"imageIdentifier\":\"$ECR_REGISTRY/dev-rag/backend:$IMAGE_TAG\",\"imageRepositoryType\":\"ECR\"}}"
+      - |
+        aws apprunner update-service \
+          --service-arn $CLIENT_SERVICE_ARN \
+          --source-configuration "{\"imageRepository\":{\"imageIdentifier\":\"$ECR_REGISTRY/dev-rag/frontend-client:$IMAGE_TAG\",\"imageRepositoryType\":\"ECR\"}}"
+      - |
+        aws apprunner update-service \
+          --service-arn $ADMIN_SERVICE_ARN \
+          --source-configuration "{\"imageRepository\":{\"imageIdentifier\":\"$ECR_REGISTRY/dev-rag/frontend-admin:$IMAGE_TAG\",\"imageRepositoryType\":\"ECR\"}}"
+
+      - echo Done.

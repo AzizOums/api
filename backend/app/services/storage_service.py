@@ -1,7 +1,5 @@
 import uuid
-import os
 from pathlib import Path
-
 from app.core.config import settings
 
 
@@ -9,11 +7,15 @@ class StorageService:
     def upload(self, content: bytes, filename: str, content_type: str) -> str:
         if settings.STORAGE_PROVIDER == "local":
             return self._local_upload(content, filename)
+        if settings.STORAGE_PROVIDER == "s3":
+            return self._s3_upload(content, filename, content_type)
         return self._gcs_upload(content, filename, content_type)
 
     def delete(self, path: str):
         if settings.STORAGE_PROVIDER == "local":
             self._local_delete(path)
+        elif settings.STORAGE_PROVIDER == "s3":
+            self._s3_delete(path)
         else:
             self._gcs_delete(path)
 
@@ -35,12 +37,30 @@ class StorageService:
             except OSError:
                 pass
 
+    # ── Amazon S3 ─────────────────────────────────────────────────────────────
+
+    def _s3_client(self):
+        import boto3
+        return boto3.client("s3", region_name=settings.AWS_REGION)
+
+    def _s3_upload(self, content: bytes, filename: str, content_type: str) -> str:
+        key = f"documents/{uuid.uuid4()}/{filename}"
+        self._s3_client().put_object(
+            Bucket=settings.S3_BUCKET_NAME,
+            Key=key,
+            Body=content,
+            ContentType=content_type,
+        )
+        return key
+
+    def _s3_delete(self, key: str):
+        self._s3_client().delete_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
+
     # ── Google Cloud Storage ──────────────────────────────────────────────────
 
     def _gcs_bucket(self):
         from google.cloud import storage
-        client = storage.Client(project=settings.GCP_PROJECT_ID)
-        return client.bucket(settings.GCS_BUCKET_NAME)
+        return storage.Client(project=settings.GCP_PROJECT_ID).bucket(settings.GCS_BUCKET_NAME)
 
     def _gcs_upload(self, content: bytes, filename: str, content_type: str) -> str:
         path = f"documents/{uuid.uuid4()}/{filename}"
