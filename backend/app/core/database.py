@@ -19,7 +19,9 @@ class Base(DeclarativeBase):
 
 async def init_db():
     async with engine.begin() as conn:
-        from app.models import document, user  # noqa: F401 — registers tables
+        # pgvector extension (always enabled — used for local vector store)
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        from app.models import document, user  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
 

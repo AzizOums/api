@@ -1,8 +1,14 @@
 version: "3.9"
 
+# ── Local stack (default) ─────────────────────────────────────────────────────
+# LLM_PROVIDER=local  → Ollama
+# VECTOR_STORE=local  → pgvector (PostgreSQL)
+# STORAGE_PROVIDER=local → ./uploads volume
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: rag
       POSTGRES_USER: rag
@@ -16,23 +22,44 @@ services:
       interval: 5s
       retries: 5
 
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Uncomment for GPU support (NVIDIA):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
   backend:
     build: ./backend
     ports:
       - "8080:8080"
     environment:
+      # Providers
+      LLM_PROVIDER: local
+      VECTOR_STORE: local
+      STORAGE_PROVIDER: local
+      # DB
       DATABASE_URL: postgresql://rag:ragpassword@postgres:5432/rag
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
-      GCS_BUCKET_NAME: ${GCS_BUCKET_NAME}
+      # Ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-llama3.2}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      # Auth
       SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-prod}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-adminpassword}
-      VECTOR_SEARCH_INDEX_ID: ${VECTOR_SEARCH_INDEX_ID}
-      VECTOR_SEARCH_ENDPOINT_ID: ${VECTOR_SEARCH_ENDPOINT_ID}
-      VECTOR_SEARCH_DEPLOYED_INDEX_ID: ${VECTOR_SEARCH_DEPLOYED_INDEX_ID}
-      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
+      # Local storage
+      LOCAL_STORAGE_PATH: /app/uploads
     volumes:
-      - ./credentials.json:/app/credentials.json:ro
+      - uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,3 +80,5 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:
+  uploads:

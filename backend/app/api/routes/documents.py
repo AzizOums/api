@@ -69,7 +69,7 @@ async def delete_document(
     if doc.gcs_path:
         storage_service.delete(doc.gcs_path)
 
-    await rag_service.delete_document_chunks(db, document_id)
+    await rag_service.delete_chunks(db, document_id)
     await db.delete(doc)
     await db.commit()
     return {"message": "Deleted"}
