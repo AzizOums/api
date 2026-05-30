@@ -1,4 +1,33 @@
 .vercel
 .env
-
 node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Node (frontends)
+.next/
+.env.local
+.env.production
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# GCP credentials (never commit)
+credentials.json
+service-account*.json
+
+# Misc
+.DS_Store
+*.log
+dist/
+build/

@@ -1,33 +1,55 @@
-version: "3"
+version: "3.9"
+
 services:
-  app:
-    build: ./
-    container_name: "app"
-    depends_on:
-      - db
-    ports: 
-      - "3003:3003"
-    env_file: .env
-    restart: always
-    networks:
-      - net
-
-  db:
-    image: "mongo"
-    container_name: "db"
+  postgres:
+    image: postgres:16
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=root
-      - MONGO_INITDB_ROOT_PASSWORD=root
-    volumes:
-      - dbdata:/data/db
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ragpassword
     ports:
-      - "27017-27019:27017-27019"
-    restart: always
-    networks:
-      - net
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag"]
+      interval: 5s
+      retries: 5
 
-networks:
-  net:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://rag:ragpassword@postgres:5432/rag
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCS_BUCKET_NAME: ${GCS_BUCKET_NAME}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-prod}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-adminpassword}
+      VECTOR_SEARCH_INDEX_ID: ${VECTOR_SEARCH_INDEX_ID}
+      VECTOR_SEARCH_ENDPOINT_ID: ${VECTOR_SEARCH_ENDPOINT_ID}
+      VECTOR_SEARCH_DEPLOYED_INDEX_ID: ${VECTOR_SEARCH_DEPLOYED_INDEX_ID}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-client:
+    build: ./frontend-client
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+
+  frontend-admin:
+    build: ./frontend-admin
+    ports:
+      - "3001:3001"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
 
 volumes:
-  dbdata:
+  postgres_data:

@@ -1,0 +1,42 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/backend:$SHORT_SHA", ./backend]
+
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-client:$SHORT_SHA", ./frontend-client]
+
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-admin:$SHORT_SHA", ./frontend-admin]
+
+  - name: gcr.io/cloud-builders/docker
+    args: [push, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/backend:$SHORT_SHA"]
+
+  - name: gcr.io/cloud-builders/docker
+    args: [push, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-client:$SHORT_SHA"]
+
+  - name: gcr.io/cloud-builders/docker
+    args: [push, "$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-admin:$SHORT_SHA"]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args: [run, deploy, "${_ENV}-rag-backend", "--image=$_REGION-docker.pkg.dev/$PROJECT_ID/rag/backend:$SHORT_SHA", "--region=$_REGION", "--platform=managed"]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args: [run, deploy, "${_ENV}-rag-client", "--image=$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-client:$SHORT_SHA", "--region=$_REGION", "--platform=managed"]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args: [run, deploy, "${_ENV}-rag-admin", "--image=$_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-admin:$SHORT_SHA", "--region=$_REGION", "--platform=managed"]
+
+substitutions:
+  _REGION: us-central1
+  _ENV: dev
+
+images:
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/rag/backend:$SHORT_SHA
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-client:$SHORT_SHA
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/rag/frontend-admin:$SHORT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
