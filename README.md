@@ -1,7 +1,9 @@
 # RAG — Guide complet
 
 Système de questions-réponses sur tes documents, avec interface client et interface admin.  
-Fonctionne **100 % en local** (Ollama + pgvector) ou **sur GCP** (Vertex AI + Cloud Run).
+Fonctionne **100 % en local** (Ollama + pgvector), **sur GCP** (Vertex AI + Cloud Run) ou **sur AWS** (Bedrock + App Runner).
+
+> Guide détaillé AWS → [README-AWS.md](./README-AWS.md)
 
 ---
 
@@ -16,7 +18,8 @@ Fonctionne **100 % en local** (Ollama + pgvector) ou **sur GCP** (Vertex AI + Cl
 7. [Configuration](#7-configuration)
 8. [Changer de modèle LLM](#8-changer-de-modèle-llm)
 9. [Déploiement sur GCP](#9-déploiement-sur-gcp)
-10. [Architecture](#10-architecture)
+10. [Déploiement sur AWS](#10-déploiement-sur-aws)
+11. [Architecture](#11-architecture)
 
 ---
 
@@ -34,8 +37,13 @@ Ces passages + ta question sont envoyés au LLM
 Le LLM génère une réponse basée sur tes documents
 ```
 
-**Stack locale :** Ollama (LLM + embeddings) · PostgreSQL + pgvector · stockage fichiers local  
-**Stack GCP :** Vertex AI Gemini · Vertex AI Vector Search · Cloud SQL · Cloud Storage · Cloud Run
+| Mode | LLM | Embeddings | Vecteurs | Stockage |
+|------|-----|-----------|---------|---------|
+| **Local** | Ollama (llama3.2, mistral…) | Ollama (nomic-embed-text) | PostgreSQL + pgvector | Filesystem |
+| **GCP** | Vertex AI Gemini | Vertex AI text-embedding-004 | Vertex AI Vector Search | Cloud Storage |
+| **AWS** | Bedrock (Claude, Llama…) | Titan Embed v2 (via KB) | Bedrock Knowledge Base | S3 |
+
+Chaque composant est **indépendant** — tu peux mixer les providers via les variables d'env.
 
 ---
 
@@ -56,6 +64,12 @@ C'est tout. Ollama tourne dans un conteneur, pas besoin de l'installer sur ta ma
 
 - Un projet GCP avec facturation activée
 - `gcloud` CLI installé et authentifié
+- `terraform` >= 1.5
+
+### Mode AWS
+
+- Un compte AWS avec accès **Bedrock** activé (voir [README-AWS.md §1](./README-AWS.md))
+- `aws` CLI installé et configuré (`aws configure`)
 - `terraform` >= 1.5
 
 ---
@@ -142,16 +156,30 @@ curl -X POST http://localhost:8080/api/v1/admin/login \
 
 ### Ce qui se passe en coulisse
 
+**Mode local / GCP** — traitement synchrone :
 ```
 Fichier uploadé
     ↓
-Découpage en chunks de ~1000 caractères (overlap 200)
+Découpage en chunks (~1000 caractères, overlap 200)
     ↓
-Chaque chunk → embedding via Ollama (nomic-embed-text)
+Chaque chunk → embedding (Ollama ou Vertex AI)
     ↓
-Vecteurs stockés dans pgvector (colonne embedding de document_chunks)
+Vecteurs stockés dans pgvector ou Vertex AI Vector Search
     ↓
 Statut → "ready"
+```
+
+**Mode AWS (Bedrock Knowledge Base)** — traitement asynchrone :
+```
+Fichier uploadé
+    ↓
+Upload vers S3
+    ↓
+StartIngestionJob déclenché → Bedrock gère chunking + embedding (Titan)
+    ↓
+Statut → "processing" (1-5 minutes)
+    ↓
+Bedrock indexe dans OpenSearch Serverless
 ```
 
 ---
@@ -163,7 +191,10 @@ Statut → "ready"
 3. Pose une question dans la barre de saisie
 4. La réponse s'affiche avec les sources utilisées
 
-**Sélecteur de modèle** — En haut à droite, tu peux choisir quel modèle Ollama utiliser pour chaque conversation (llama3.2, mistral, etc.). Seuls les modèles que tu as téléchargés fonctionneront.
+**Sélecteur de modèle** — En haut à droite, tu peux choisir le modèle pour chaque conversation :
+- **Local** : llama3.2, mistral, gemma2, etc. (modèles Ollama téléchargés)
+- **GCP** : gemini-1.5-pro, gemini-2.0-flash, etc.
+- **AWS** : claude-3-5-sonnet, claude-3-haiku, llama-3-1-70b, mistral-large, etc.
 
 ---
 
@@ -174,18 +205,18 @@ URL : http://localhost:3001
 ### Onglet Documents
 - **Upload** : glisser-déposer ou cliquer pour choisir un fichier
 - **Statuts** : `pending` → `processing` → `ready` (ou `error`)
-- **Supprimer** : l'icône poubelle supprime le document ET ses vecteurs
+- **Supprimer** : l'icône poubelle supprime le document ET ses vecteurs (ou déclenche une resynchronisation KB en mode AWS)
 
 ### Onglet Users
 - Liste de tous les utilisateurs inscrits
 - **Active / Disabled** : clic sur le badge pour activer ou désactiver un compte
 
 ### Onglet Models
-- Vue des modèles disponibles et du modèle par défaut
+- Vue des modèles disponibles selon le provider actif et le modèle par défaut
 
 ### Stats en haut
 - Nombre de documents indexés
-- Nombre de chunks (passages) dans la base vectorielle
+- Nombre de chunks dans la base vectorielle
 - Nombre d'utilisateurs inscrits
 
 ---
@@ -198,27 +229,39 @@ Copie `.env.example` en `.env` dans le dossier `backend/` :
 cp backend/.env.example backend/.env
 ```
 
-### Variables principales
+### Variables clés
 
 ```env
-# Quel provider utiliser pour chaque composant
-LLM_PROVIDER=local        # local | vertexai
-VECTOR_STORE=local        # local | vertexai
-STORAGE_PROVIDER=local    # local | gcs
+# ── Providers ──────────────────────────────────────────
+LLM_PROVIDER=local        # local | vertexai | bedrock
+VECTOR_STORE=local        # local | vertexai | bedrock
+STORAGE_PROVIDER=local    # local | gcs | s3
 
-# Sécurité
+# ── Sécurité ───────────────────────────────────────────
 SECRET_KEY=change-me      # clé JWT — change en prod
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=adminpassword
 
-# Modèles Ollama (mode local)
+# ── Mode local ─────────────────────────────────────────
 OLLAMA_LLM_MODEL=llama3.2
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+
+# ── Mode GCP ───────────────────────────────────────────
+# GCP_PROJECT_ID=ton-project
+# DEFAULT_LLM_MODEL=gemini-1.5-pro
+# ...
+
+# ── Mode AWS ───────────────────────────────────────────
+# AWS_REGION=us-east-1
+# BEDROCK_LLM_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
+# BEDROCK_KNOWLEDGE_BASE_ID=XXXXXXXXXX
+# S3_BUCKET_NAME=ton-bucket
+# ...
 ```
 
 > En mode Docker Compose, les variables sont déjà définies dans `docker-compose.yml`. Le fichier `.env` sert pour un lancement direct du backend sans Docker.
 
-### Changer le modèle LLM par défaut
+### Changer le modèle LLM par défaut (local)
 
 ```env
 OLLAMA_LLM_MODEL=mistral   # ou llama3.1:8b, gemma2, qwen2.5...
@@ -251,17 +294,31 @@ curl http://localhost:8080/api/v1/chat/models \
   -H "Authorization: Bearer TON_TOKEN"
 ```
 
-### Ajouter un nouveau modèle Ollama
+### Modèles par provider
 
+**Local (Ollama)**
 ```bash
-# Télécharger
-docker compose exec ollama ollama pull qwen2.5
-
-# Vérifier
-docker compose exec ollama ollama list
+docker compose exec ollama ollama pull qwen2.5   # ajouter un nouveau modèle
+docker compose exec ollama ollama list           # voir les modèles disponibles
 ```
 
-Il est immédiatement disponible dans le sélecteur.
+**GCP (Vertex AI)**
+
+| ID | Modèle |
+|----|--------|
+| `gemini-1.5-pro` | gemini-1.5-pro-002 |
+| `gemini-1.5-flash` | gemini-1.5-flash-002 |
+| `gemini-2.0-flash` | gemini-2.0-flash-001 |
+
+**AWS (Bedrock)** — nécessite activation dans la console Bedrock
+
+| ID | Modèle |
+|----|--------|
+| `claude-3-5-sonnet` | anthropic.claude-3-5-sonnet-20241022-v2:0 |
+| `claude-3-haiku` | anthropic.claude-3-haiku-20240307-v1:0 |
+| `llama-3-1-70b` | meta.llama3-1-70b-instruct-v1:0 |
+| `mistral-large` | mistral.mistral-large-2402-v1:0 |
+| `titan-text` | amazon.titan-text-premier-v1:0 |
 
 ---
 
@@ -278,8 +335,6 @@ gcloud auth application-default login
 
 ```bash
 cd terraform
-
-# Copier et remplir les variables
 cp terraform.tfvars.example terraform.tfvars
 # → édite terraform.tfvars avec ton project_id, region, mots de passe, etc.
 
@@ -295,28 +350,26 @@ Après l'apply, récupère les outputs :
 terraform output
 ```
 
-Tu obtiendras :
 ```
-backend_url                   = "https://dev-rag-backend-xxx.run.app"
-client_url                    = "https://dev-rag-client-xxx.run.app"
-admin_url                     = "https://dev-rag-admin-xxx.run.app"
-vector_search_index_id        = "projects/.../indexes/..."
-vector_search_endpoint_id     = "projects/.../indexEndpoints/..."
+backend_url                     = "https://dev-rag-backend-xxx.run.app"
+client_url                      = "https://dev-rag-client-xxx.run.app"
+admin_url                       = "https://dev-rag-admin-xxx.run.app"
+vector_search_index_id          = "projects/.../indexes/..."
+vector_search_endpoint_id       = "projects/.../indexEndpoints/..."
 vector_search_deployed_index_id = "dev_rag_deployed"
-artifact_registry             = "us-central1-docker.pkg.dev/PROJECT/rag"
+artifact_registry               = "us-central1-docker.pkg.dev/PROJECT/rag"
 ```
 
 ### Étape 2 — Builder et pusher les images
 
 ```bash
-# Configurer Docker pour Artifact Registry
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
 REGISTRY="us-central1-docker.pkg.dev/TON_PROJECT_ID/rag"
 
-docker build -t $REGISTRY/backend:latest ./backend
+docker build -t $REGISTRY/backend:latest         ./backend
 docker build -t $REGISTRY/frontend-client:latest ./frontend-client
-docker build -t $REGISTRY/frontend-admin:latest ./frontend-admin
+docker build -t $REGISTRY/frontend-admin:latest  ./frontend-admin
 
 docker push $REGISTRY/backend:latest
 docker push $REGISTRY/frontend-client:latest
@@ -327,25 +380,20 @@ docker push $REGISTRY/frontend-admin:latest
 
 ```bash
 gcloud run deploy dev-rag-backend \
-  --image $REGISTRY/backend:latest \
-  --region us-central1
+  --image $REGISTRY/backend:latest --region us-central1
 
 gcloud run deploy dev-rag-client \
-  --image $REGISTRY/frontend-client:latest \
-  --region us-central1
+  --image $REGISTRY/frontend-client:latest --region us-central1
 
 gcloud run deploy dev-rag-admin \
-  --image $REGISTRY/frontend-admin:latest \
-  --region us-central1
+  --image $REGISTRY/frontend-admin:latest --region us-central1
 ```
 
 ### Étape 4 — CI/CD automatique avec Cloud Build
 
-Connecte Cloud Build à ton repo GitHub dans la console GCP, puis chaque push déclenche un build automatique via `cloudbuild.yaml`.
+Connecte Cloud Build à ton repo GitHub dans la console GCP — chaque push déclenche un build automatique via `cloudbuild.yaml`.
 
 ### Basculer du local vers GCP
-
-Il suffit de changer les variables d'environnement du backend :
 
 ```env
 LLM_PROVIDER=vertexai
@@ -362,83 +410,108 @@ DEFAULT_LLM_MODEL=gemini-1.5-pro
 
 ---
 
-## 10. Architecture
+## 10. Déploiement sur AWS
+
+> Guide complet : **[README-AWS.md](./README-AWS.md)**
+
+### Résumé rapide
+
+```bash
+# 1. Activer les modèles dans la console Bedrock (Claude + Titan Embed)
+
+# 2. Infrastructure
+cd terraform-aws
+cp terraform.tfvars.example terraform.tfvars
+terraform init && terraform apply
+
+# 3. Build + push vers ECR
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+ECR="$ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/dev-rag"
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.us-east-1.amazonaws.com
+
+docker build -t $ECR/backend:latest         ./backend  && docker push $ECR/backend:latest
+docker build -t $ECR/frontend-client:latest ./frontend-client && docker push $ECR/frontend-client:latest
+docker build -t $ECR/frontend-admin:latest  ./frontend-admin  && docker push $ECR/frontend-admin:latest
+
+# 4. Déployer sur App Runner (voir README-AWS.md §3)
+```
+
+### Basculer du local vers AWS
+
+```env
+LLM_PROVIDER=bedrock
+VECTOR_STORE=bedrock
+STORAGE_PROVIDER=s3
+
+AWS_REGION=us-east-1
+S3_BUCKET_NAME=ton-bucket-rag
+BEDROCK_KNOWLEDGE_BASE_ID=XXXXXXXXXX
+BEDROCK_DATA_SOURCE_ID=YYYYYYYYYY
+BEDROCK_LLM_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
+```
+
+---
+
+## 11. Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Navigateur                           │
-│                                                             │
-│  ┌──────────────────┐        ┌──────────────────────────┐  │
-│  │  frontend-client │        │    frontend-admin        │  │
-│  │  Next.js :3000   │        │    Next.js :3001         │  │
-│  │                  │        │                          │  │
-│  │  • Login/Register│        │  • Upload documents      │  │
-│  │  • Chat          │        │  • Gérer utilisateurs    │  │
-│  │  • Sélecteur LLM │        │  • Stats                 │  │
-│  └────────┬─────────┘        └────────────┬─────────────┘  │
-└───────────┼──────────────────────────────┼─────────────────┘
-            │ HTTP/REST                    │ HTTP/REST
-            ▼                             ▼
-┌───────────────────────────────────────────────────────────┐
-│                   backend FastAPI :8080                   │
-│                                                           │
-│  POST /api/v1/auth/login|register                         │
-│  POST /api/v1/chat/          → pipeline RAG               │
-│  POST /api/v1/documents/upload → ingestion                │
-│  GET  /api/v1/admin/stats|users|models                    │
-│                                                           │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │              Services internes                      │  │
-│  │  EmbeddingService  → Ollama | Vertex AI             │  │
-│  │  LLMService        → Ollama | Vertex AI Gemini      │  │
-│  │  VectorStoreService→ pgvector | Vertex AI VS        │  │
-│  │  StorageService    → filesystem | GCS               │  │
-│  └─────────────────────────────────────────────────────┘  │
-└────┬──────────────────────┬─────────────────────┬─────────┘
-     │                      │                     │
-     ▼                      ▼                     ▼
-┌─────────┐          ┌────────────┐        ┌──────────────┐
-│ Ollama  │          │ PostgreSQL │        │  Fichiers    │
-│  :11434 │          │ + pgvector │        │  /uploads    │
-│         │          │   :5432    │        │  ou GCS      │
-│ • LLM   │          │           │        └──────────────┘
-│ • Embed │          │ • users    │
-└─────────┘          │ • documents│
-  (local)            │ • chunks   │
-                     │ • vectors  │
-                     └────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                          Navigateur                             │
+│  ┌───────────────────────┐    ┌─────────────────────────────┐   │
+│  │   frontend-client     │    │   frontend-admin            │   │
+│  │   Next.js :3000       │    │   Next.js :3001             │   │
+│  │   • Login / Register  │    │   • Upload documents        │   │
+│  │   • Chat              │    │   • Gestion utilisateurs    │   │
+│  │   • Sélecteur LLM     │    │   • Stats / Modèles         │   │
+│  └───────────┬───────────┘    └─────────────┬───────────────┘   │
+└──────────────┼─────────────────────────────-┼───────────────────┘
+               │ HTTP/REST                    │ HTTP/REST
+               ▼                             ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    backend FastAPI :8080                          │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │                      Services                              │  │
+│  │  LLMService       → Ollama | Vertex AI Gemini | Bedrock    │  │
+│  │  EmbeddingService → Ollama | Vertex AI                     │  │
+│  │  VectorStore      → pgvector | Vertex AI VS | Bedrock KB   │  │
+│  │  StorageService   → filesystem | GCS | S3                  │  │
+│  └────────────────────────────────────────────────────────────┘  │
+└──────┬──────────────────────┬─────────────────────┬──────────────┘
+       │                      │                     │
+       ▼                      ▼                     ▼
+  ┌─────────┐          ┌────────────┐      ┌────────────────┐
+  │  Mode   │          │    BDD     │      │    Fichiers    │
+  │  local  │          │            │      │                │
+  │  Ollama │          │ PostgreSQL │      │ filesystem     │
+  │  :11434 │          │  (RDS en   │      │ GCS            │
+  │         │          │   cloud)   │      │ S3             │
+  └─────────┘          └────────────┘      └────────────────┘
+
+  Vecteurs selon le provider :
+  ┌──────────────────────────────────────────────────────────┐
+  │  local   → colonne pgvector dans PostgreSQL              │
+  │  vertexai → Vertex AI Vector Search (Matching Engine)    │
+  │  bedrock  → Bedrock Knowledge Base + OpenSearch Serverless│
+  └──────────────────────────────────────────────────────────┘
 ```
 
 ### Flux d'une question
 
 ```
-1. POST /chat  { question, model? }
+POST /chat  { question, model? }
        ↓
-2. embed_query(question)          → vecteur 768 dims
+Mode local/GCP :                    Mode AWS (Bedrock) :
+  embed_query(question)               bedrock-agent-runtime.retrieve()
+       ↓                              → Bedrock gère embedding + recherche
+  vector_store.query()                       ↓
+       ↓                              passages pertinents
+  SELECT chunks WHERE id IN ...              ↓
+       ↓                         LLM(contexte + question) → réponse
+  LLM(contexte + question)
        ↓
-3. vector_store.query(vecteur)    → top-5 chunk_ids
-       ↓
-4. SELECT content WHERE id IN ... → textes des chunks
-       ↓
-5. LLM(contexte + question)       → réponse
-       ↓
-6. { answer, sources, model }
-```
-
-### Flux d'ingestion d'un document
-
-```
-1. POST /documents/upload  (fichier)
-       ↓
-2. Sauvegarde fichier (local ou GCS)
-       ↓
-3. Découpage en chunks (1000 chars, overlap 200)
-       ↓
-4. embed_documents(chunks)        → liste de vecteurs
-       ↓
-5. INSERT document_chunks + upsert vecteurs dans pgvector
-       ↓
-6. status = "ready"
+{ answer, sources, model }
 ```
 
 ---
@@ -446,33 +519,27 @@ DEFAULT_LLM_MODEL=gemini-1.5-pro
 ## Commandes utiles
 
 ```bash
-# Logs en temps réel
-docker compose logs -f backend
+# ── Local ──────────────────────────────────────────────────────────
+docker compose logs -f backend          # logs en temps réel
+docker compose restart backend          # relancer le backend
+docker compose exec ollama ollama list  # modèles Ollama disponibles
+docker compose exec ollama ollama pull gemma2  # télécharger un modèle
+docker compose down                     # arrêter (données conservées)
+docker compose down -v                  # arrêter + effacer les données
 
-# Redémarrer un service
-docker compose restart backend
-
-# Voir les modèles Ollama téléchargés
-docker compose exec ollama ollama list
-
-# Supprimer un modèle Ollama
-docker compose exec ollama ollama rm mistral
-
-# Accéder à la base PostgreSQL
+# ── PostgreSQL ─────────────────────────────────────────────────────
 docker compose exec postgres psql -U rag -d rag
+  \dt                                   # lister les tables
+  SELECT name, status FROM documents;
+  SELECT COUNT(*) FROM document_chunks;
 
-# Voir les documents indexés
-docker compose exec postgres psql -U rag -d rag -c "SELECT name, status FROM documents;"
-
-# Voir le nombre de chunks par document
-docker compose exec postgres psql -U rag -d rag \
-  -c "SELECT d.name, COUNT(c.id) as chunks FROM documents d JOIN document_chunks c ON c.document_id = d.id GROUP BY d.name;"
-
-# Tout arrêter (données conservées)
-docker compose down
-
-# Tout effacer y compris les données
-docker compose down -v
+# ── AWS ────────────────────────────────────────────────────────────
+aws bedrock-agent list-ingestion-jobs \
+  --knowledge-base-id KB_ID --data-source-id DS_ID
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id KB_ID --data-source-id DS_ID
+aws s3 ls s3://TON_BUCKET/documents/ --recursive
+aws logs tail /aws/apprunner/dev-rag-backend/.../application --follow
 ```
 
 ---
@@ -488,16 +555,23 @@ docker compose logs backend
 **Ollama ne répond pas / timeout**
 ```bash
 docker compose logs ollama
-# Vérifier que le modèle est bien téléchargé :
-docker compose exec ollama ollama list
+docker compose exec ollama ollama list  # vérifier que le modèle est téléchargé
 ```
 
-**"No relevant documents found"**
-- Vérifie que le document a le statut `ready` dans l'admin
-- Vérifie que `nomic-embed-text` est bien téléchargé
-- Le document est-il en texte lisible ? (les PDF scannés sans OCR ne fonctionnent pas)
+**"No relevant documents found" (local)**
+- Le document a-t-il le statut `ready` dans l'admin ?
+- `nomic-embed-text` est-il bien téléchargé ?
+- Les PDF scannés sans OCR ne fonctionnent pas
+
+**"No relevant documents found" (AWS)**
+- L'ingestion Bedrock est asynchrone — attends 2-5 min
+- Vérifie le statut : `aws bedrock-agent list-ingestion-jobs ...`
+
+**AccessDeniedException Bedrock**
+- Le modèle n'est pas activé dans la console Bedrock
+- Vérifie les permissions IAM du rôle App Runner
 
 **Qualité des réponses insuffisante**
-- Essaie un modèle plus grand (`llama3.1:8b`, `mistral`)
-- Tes documents sont-ils dans la même langue que tes questions ?
-- `gemma2` fonctionne très bien en français
+- Utilise un modèle plus grand (`llama3.1:8b`, `mistral`, `claude-3-5-sonnet`)
+- `gemma2` et `mistral-large` fonctionnent très bien en français
+- Vérifie que tes documents sont dans la même langue que tes questions
